@@ -1,249 +1,269 @@
 -- CryoBytePrime CBT & Attendance System
--- Phase C2: Core Schema & RLS Policies
+-- Core Database Schema with RLS Policies
 -- Migration: 20240101000000_init_schema
 
 -- Enable UUID extension
-create extension if not exists "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- ============================================================================
--- 1. ENUMS
--- ============================================================================
+-- ============================================
+-- ENUMS
+-- ============================================
 
-create type user_role as enum ('admin', 'teacher', 'student');
-create type exam_status as enum ('draft', 'published', 'archived');
-create type question_type as enum ('multiple_choice', 'true_false', 'short_answer', 'essay');
-create type attendance_status as enum ('present', 'absent', 'late', 'excused');
+CREATE TYPE user_role AS ENUM ('admin', 'teacher', 'student');
+CREATE TYPE exam_status AS ENUM ('draft', 'published', 'archived');
+CREATE TYPE attendance_status AS ENUM ('present', 'absent', 'late', 'excused');
 
--- ============================================================================
--- 2. TABLES
--- ============================================================================
+-- ============================================
+-- TABLES
+-- ============================================
 
--- Profiles (extends auth.users)
-create table public.profiles (
-    id uuid references auth.users(id) on delete cascade primary key,
-    email text not null,
-    full_name text,
-    role user_role default 'student' not null,
-    created_at timestamptz default now(),
-    updated_at timestamptz default now()
+-- Users table (extends Supabase Auth)
+CREATE TABLE public.users (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL UNIQUE,
+    full_name TEXT NOT NULL,
+    role user_role NOT NULL DEFAULT 'student',
+    student_id TEXT UNIQUE,
+    teacher_id TEXT UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Classes/Groups
-create table public.classes (
-    id uuid default uuid_generate_v4() primary key,
-    name text not null,
-    academic_year text not null,
-    teacher_id uuid references public.profiles(id),
-    created_at timestamptz default now()
+CREATE TABLE public.classes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    academic_year TEXT NOT NULL,
+    teacher_id UUID NOT NULL REFERENCES public.users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Class Enrollments
-create table public.class_enrollments (
-    id uuid default uuid_generate_v4() primary key,
-    class_id uuid references public.classes(id) on delete cascade,
-    student_id uuid references public.profiles(id) on delete cascade,
-    enrolled_at timestamptz default now(),
-    unique(class_id, student_id)
+-- Class Enrollment
+CREATE TABLE public.class_enrollments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    class_id UUID NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    enrolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(class_id, student_id)
+);
+
+-- Subjects
+CREATE TABLE public.subjects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Question Bank
+CREATE TABLE public.questions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    subject_id UUID NOT NULL REFERENCES public.subjects(id),
+    question_text TEXT NOT NULL,
+    question_type TEXT NOT NULL CHECK (question_type IN ('multiple_choice', 'true_false', 'short_answer', 'essay')),
+    options JSONB, -- For multiple choice: [{"text": "A", "is_correct": false}]
+    correct_answer TEXT,
+    marks INTEGER NOT NULL DEFAULT 1,
+    difficulty TEXT CHECK (difficulty IN ('easy', 'medium', 'hard')),
+    tags TEXT[],
+    created_by UUID NOT NULL REFERENCES public.users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Exams
-create table public.exams (
-    id uuid default uuid_generate_v4() primary key,
-    title text not null,
-    description text,
-    subject text,
-    status exam_status default 'draft' not null,
-    duration_minutes int default 60,
-    total_marks int default 100,
-    pass_marks int default 40,
-    created_by uuid references public.profiles(id),
-    created_at timestamptz default now(),
-    published_at timestamptz
+CREATE TABLE public.exams (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title TEXT NOT NULL,
+    subject_id UUID NOT NULL REFERENCES public.subjects(id),
+    class_id UUID NOT NULL REFERENCES public.classes(id),
+    status exam_status NOT NULL DEFAULT 'draft',
+    duration_minutes INTEGER NOT NULL,
+    total_marks INTEGER NOT NULL,
+    passing_marks INTEGER,
+    scheduled_at TIMESTAMPTZ,
+    created_by UUID NOT NULL REFERENCES public.users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Questions
-create table public.questions (
-    id uuid default uuid_generate_v4() primary key,
-    exam_id uuid references public.exams(id) on delete cascade,
-    question_text text not null,
-    question_type question_type default 'multiple_choice' not null,
-    marks int default 1,
-    options jsonb, -- Stores options for MCQs: [{"text": "A", "is_correct": false}, ...]
-    correct_answer text, -- Stores correct answer key
-    created_at timestamptz default now()
+-- Exam Questions (linking table)
+CREATE TABLE public.exam_questions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    exam_id UUID NOT NULL REFERENCES public.exams(id) ON DELETE CASCADE,
+    question_id UUID NOT NULL REFERENCES public.questions(id),
+    order_num INTEGER NOT NULL,
+    marks_allocated INTEGER NOT NULL,
+    UNIQUE(exam_id, question_id)
 );
 
--- Exam Attempts (Student taking an exam)
-create table public.exam_attempts (
-    id uuid default uuid_generate_v4() primary key,
-    exam_id uuid references public.exams(id) on delete cascade,
-    student_id uuid references public.profiles(id) on delete cascade,
-    started_at timestamptz default now(),
-    submitted_at timestamptz,
-    status text default 'in_progress', -- in_progress, submitted, graded
-    total_score int default 0,
-    unique(exam_id, student_id)
+-- Student Attempts
+CREATE TABLE public.attempts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    exam_id UUID NOT NULL REFERENCES public.exams(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    submitted_at TIMESTAMPTZ,
+    status TEXT NOT NULL CHECK (status IN ('in_progress', 'submitted', 'graded')),
+    score NUMERIC(5,2),
+    percentage NUMERIC(5,2),
+    UNIQUE(exam_id, student_id)
 );
 
--- Answers (Student responses)
-create table public.answers (
-    id uuid default uuid_generate_v4() primary key,
-    attempt_id uuid references public.exam_attempts(id) on delete cascade,
-    question_id uuid references public.questions(id) on delete cascade,
-    selected_answer text,
-    is_correct boolean default false,
-    marks_awarded int default 0,
-    created_at timestamptz default now()
+-- Attempt Answers
+CREATE TABLE public.attempt_answers (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    attempt_id UUID NOT NULL REFERENCES public.attempts(id) ON DELETE CASCADE,
+    question_id UUID NOT NULL REFERENCES public.questions(id),
+    student_answer TEXT,
+    is_correct BOOLEAN,
+    marks_awarded NUMERIC(5,2) DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Attendance Records
-create table public.attendance (
-    id uuid default uuid_generate_v4() primary key,
-    class_id uuid references public.classes(id) on delete cascade,
-    student_id uuid references public.profiles(id) on delete cascade,
-    date date not null,
-    status attendance_status default 'absent' not null,
-    remarks text,
-    recorded_by uuid references public.profiles(id),
-    created_at timestamptz default now(),
-    unique(class_id, student_id, date)
+CREATE TABLE public.attendance (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    class_id UUID NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    status attendance_status NOT NULL,
+    notes TEXT,
+    recorded_by UUID NOT NULL REFERENCES public.users(id),
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(class_id, student_id, date)
 );
 
--- ============================================================================
--- 3. ROW LEVEL SECURITY (RLS)
--- ============================================================================
+-- ============================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- ============================================
 
-alter table public.profiles enable row level security;
-alter table public.classes enable row level security;
-alter table public.class_enrollments enable row level security;
-alter table public.exams enable row level security;
-alter table public.questions enable row level security;
-alter table public.exam_attempts enable row level security;
-alter table public.answers enable row level security;
-alter table public.attendance enable row level security;
+-- Enable RLS on all tables
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.classes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.class_enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subjects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.questions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exams ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_questions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.attempt_answers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.attendance ENABLE ROW LEVEL SECURITY;
 
--- Profiles Policies
-create policy "Public profiles are viewable by everyone"
-    on public.profiles for select
-    using ( true );
+-- Users: Users can see their own data; admins/teachers see all
+CREATE POLICY users_select_own ON public.users
+    FOR SELECT USING (auth.uid() = id OR EXISTS (
+        SELECT 1 FROM public.users WHERE id = auth.uid() AND role IN ('admin', 'teacher')
+    ));
 
-create policy "Users can update own profile"
-    on public.profiles for update
-    using ( auth.uid() = id );
+CREATE POLICY users_update_own ON public.users
+    FOR UPDATE USING (auth.uid() = id);
 
--- Classes Policies (Teachers can create/edit, Students view own)
-create policy "Teachers can manage classes"
-    on public.classes for all
-    using ( 
-        exists (select 1 from public.profiles where id = auth.uid() and role = 'teacher') 
-        or 
-        exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+-- Classes: Teachers see their classes, students see enrolled classes
+CREATE POLICY classes_select ON public.classes
+    FOR SELECT USING (
+        teacher_id = auth.uid() OR
+        EXISTS (SELECT 1 FROM public.class_enrollments WHERE class_id = id AND student_id = auth.uid()) OR
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin')
     );
 
-create policy "Students can view enrolled classes"
-    on public.classes for select
-    using (
-        exists (
-            select 1 from public.class_enrollments ce
-            join public.profiles p on p.id = auth.uid()
-            where ce.class_id = classes.id and ce.student_id = p.id
-        )
-        or
-        exists (select 1 from public.profiles where id = auth.uid() and role = 'teacher')
+-- Questions: Teachers can manage, students can only view in exam context
+CREATE POLICY questions_select ON public.questions
+    FOR SELECT USING (
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role IN ('admin', 'teacher')) OR
+        created_by = auth.uid()
     );
 
--- Exams Policies
-create policy "Teachers can manage exams"
-    on public.exams for all
-    using (
-        exists (select 1 from public.profiles where id = auth.uid() and role in ('teacher', 'admin'))
+CREATE POLICY questions_insert ON public.questions
+    FOR INSERT WITH CHECK (
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role IN ('admin', 'teacher'))
     );
 
-create policy "Students can view published exams"
-    on public.exams for select
-    using (
-        status = 'published' 
-        and exists (select 1 from public.profiles where id = auth.uid() and role = 'student')
+CREATE POLICY questions_update ON public.questions
+    FOR UPDATE USING (
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role IN ('admin', 'teacher')) AND
+        created_by = auth.uid()
     );
 
--- Questions Policies
-create policy "Teachers can manage questions"
-    on public.questions for all
-    using (
-        exists (select 1 from public.profiles where id = auth.uid() and role in ('teacher', 'admin'))
-    );
-
--- Exam Attempts Policies
-create policy "Students can create/view own attempts"
-    on public.exam_attempts for all
-    using ( auth.uid() = student_id );
-
-create policy "Teachers can view all attempts"
-    on public.exam_attempts for select
-    using (
-        exists (select 1 from public.profiles where id = auth.uid() and role in ('teacher', 'admin'))
-    );
-
--- Answers Policies
-create policy "Students can create/view own answers"
-    on public.answers for all
-    using (
-        exists (
-            select 1 from public.exam_attempts ea
-            where ea.id = answers.attempt_id and ea.student_id = auth.uid()
+-- Exams: Similar to questions
+CREATE POLICY exams_select ON public.exams
+    FOR SELECT USING (
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role IN ('admin', 'teacher')) OR
+        EXISTS (
+            SELECT 1 FROM public.attempts 
+            WHERE exam_id = id AND student_id = auth.uid()
         )
     );
 
-create policy "Teachers can view all answers"
-    on public.answers for select
-    using (
-        exists (select 1 from public.profiles where id = auth.uid() and role in ('teacher', 'admin'))
+-- Attempts: Students see their own, teachers see all for their classes
+CREATE POLICY attempts_select ON public.attempts
+    FOR SELECT USING (
+        student_id = auth.uid() OR
+        EXISTS (
+            SELECT 1 FROM public.exams e
+            JOIN public.classes c ON e.class_id = c.id
+            WHERE e.id = exam_id AND c.teacher_id = auth.uid()
+        ) OR
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin')
     );
 
--- Attendance Policies
-create policy "Teachers can record attendance"
-    on public.attendance for all
-    using (
-        exists (select 1 from public.profiles where id = auth.uid() and role in ('teacher', 'admin'))
+-- Attendance: Teachers record, students view own
+CREATE POLICY attendance_select ON public.attendance
+    FOR SELECT USING (
+        student_id = auth.uid() OR
+        EXISTS (
+            SELECT 1 FROM public.classes 
+            WHERE id = class_id AND teacher_id = auth.uid()
+        ) OR
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin')
     );
 
-create policy "Students can view own attendance"
-    on public.attendance for select
-    using ( auth.uid() = student_id );
+CREATE POLICY attendance_insert ON public.attendance
+    FOR INSERT WITH CHECK (
+        EXISTS (
+            SELECT 1 FROM public.classes 
+            WHERE id = class_id AND teacher_id = auth.uid()
+        ) OR
+        EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin')
+    );
 
--- ============================================================================
--- 4. TRIGGERS & FUNCTIONS
--- ============================================================================
+-- ============================================
+-- TRIGGERS (Updated At timestamps)
+-- ============================================
 
--- Function to handle new user signup
-create or replace function public.handle_new_user()
-returns trigger as $$
-begin
-  insert into public.profiles (id, email, full_name, role)
-  values (
-    new.id,
-    new.email,
-    new.raw_user_meta_data->>'full_name',
-    (new.raw_user_meta_data->>'role')::user_role
-  );
-  return new;
-end;
-$$ language plpgsql security definer;
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- Trigger on auth.users
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
+CREATE TRIGGER users_updated_at
+    BEFORE UPDATE ON public.users
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Update timestamp trigger
-create or replace function update_updated_at_column()
-returns trigger as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$ language plpgsql;
+CREATE TRIGGER questions_updated_at
+    BEFORE UPDATE ON public.questions
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-create trigger update_profiles_updated_at
-  before update on public.profiles
-  for each row execute procedure update_updated_at_column();
+CREATE TRIGGER exams_updated_at
+    BEFORE UPDATE ON public.exams
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
+-- INDEXES (Performance)
+-- ============================================
+
+CREATE INDEX idx_class_enrollments_student ON public.class_enrollments(student_id);
+CREATE INDEX idx_class_enrollments_class ON public.class_enrollments(class_id);
+CREATE INDEX idx_questions_subject ON public.questions(subject_id);
+CREATE INDEX idx_questions_created_by ON public.questions(created_by);
+CREATE INDEX idx_exams_class ON public.exams(class_id);
+CREATE INDEX idx_exams_subject ON public.exams(subject_id);
+CREATE INDEX idx_attempts_exam ON public.attempts(exam_id);
+CREATE INDEX idx_attempts_student ON public.attempts(student_id);
+CREATE INDEX idx_attempt_answers_attempt ON public.attempt_answers(attempt_id);
+CREATE INDEX idx_attendance_class_date ON public.attendance(class_id, date);
+CREATE INDEX idx_attendance_student ON public.attendance(student_id);
