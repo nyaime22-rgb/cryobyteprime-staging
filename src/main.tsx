@@ -5,6 +5,7 @@ import { AuthProvider } from './context/AuthContext'
 import AppShell from './pages/AppShell'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
+import QuestionBankPage from './pages/QuestionBankPage'
 import UsersPage from './pages/UsersPage'
 import CoursesPage from './pages/CoursesPage'
 import BatchesPage from './pages/BatchesPage'
@@ -24,6 +25,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="courses" element={<CoursesPage />} />
             <Route path="batches" element={<BatchesPage />} />
             <Route path="reports" element={<ReportsPage />} />
+            <Route path="questions" element={<QuestionBankPage />} />
           </Route>
         </Routes>
       </AuthProvider>

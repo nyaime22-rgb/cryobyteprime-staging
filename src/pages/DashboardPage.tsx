@@ -17,6 +17,7 @@ export default function DashboardPage() {
     { title: 'Course Management', desc: 'Configure courses and subjects', path: '/courses' },
     { title: 'Batch Scheduling', desc: 'Manage academic batches', path: '/batches' },
     { title: 'Reports & Analytics', desc: 'View system-wide reports', path: '/reports' },
+    { title: 'Question Bank', desc: 'Create and manage question bank', path: '/questions' },
   ];
 
   return (
@@ -66,6 +67,7 @@ export default function DashboardPage() {
             <Button variant="outline" onClick={() => navigate('/users')}>+ Add User</Button>
             <Button variant="outline" onClick={() => navigate('/courses')}>+ Add Course</Button>
             <Button variant="outline" onClick={() => navigate('/batches')}>+ Create Batch</Button>
+              <Button variant="outline" onClick={() => navigate('/questions')}>+ Question Bank</Button>
           </div>
           <p className="text-sm text-gray-500 mt-4">
             More functionality coming soon. This dashboard will be expanded with role-specific widgets and quick actions.
